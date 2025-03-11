@@ -194,6 +194,37 @@ func NewManager(cpuPolicyName string, cpuPolicyOptions map[string]string, reconc
 			return nil, fmt.Errorf("new static policy error: %w", err)
 		}
 
+	case PolicyHpc:
+		topo, err = topology.Discover(machineInfo)
+		if err != nil {
+			return nil, err
+		}
+		klog.InfoS("Detected CPU topology", "topology", topo)
+
+		reservedCPUs, ok := nodeAllocatableReservation[v1.ResourceCPU]
+		if !ok {
+			// The hpc policy cannot initialize without this information.
+			return nil, fmt.Errorf("[cpumanager] unable to determine reserved CPU resources for hpc policy")
+		}
+		if reservedCPUs.IsZero() {
+			// The hpc policy requires this to be nonzero. Zero CPU reservation
+			// would allow the shared pool to be completely exhausted. At that point
+			// either we would violate our guarantee of exclusivity or need to evict
+			// any pod that has at least one container that requires zero CPUs.
+			// See the comments in policy_hpc.go for more details.
+			return nil, fmt.Errorf("[cpumanager] the hpc policy requires systemreserved.cpu + kubereserved.cpu to be greater than zero")
+		}
+
+		// Take the ceiling of the reservation, since fractional CPUs cannot be
+		// exclusively allocated.
+		reservedCPUsFloat := float64(reservedCPUs.MilliValue()) / 1000
+		numReservedCPUs := int(math.Ceil(reservedCPUsFloat))
+
+		policy, err = NewHpcPolicy(topo, numReservedCPUs, specificCPUs, affinity, cpuPolicyOptions)
+		if err != nil {
+			return nil, fmt.Errorf("[cpumanager] the hpc policy error: %w", err)
+		}
+
 	default:
 		return nil, fmt.Errorf("unknown policy: \"%s\"", cpuPolicyName)
 	}

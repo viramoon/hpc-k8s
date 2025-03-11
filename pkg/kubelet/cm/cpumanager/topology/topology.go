@@ -245,6 +245,17 @@ func (d CPUDetails) CPUsInCores(ids ...int) cpuset.CPUSet {
 	return cpuset.New(cpuIDs...)
 }
 
+func (d CPUDetails) CPUsInCoresSingle(ids ...int) cpuset.CPUSet {
+	for _, id := range ids {
+		for cpu, info := range d {
+			if info.CoreID == id {
+				return cpuset.New(cpu)
+			}
+		}
+	}
+	return cpuset.New()
+}
+
 // Discover returns CPUTopology based on cadvisor node info
 func Discover(machineInfo *cadvisorapi.MachineInfo) (*CPUTopology, error) {
 	if machineInfo.NumCores == 0 {

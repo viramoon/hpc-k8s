@@ -25,6 +25,7 @@ import (
 	kubefeatures "k8s.io/kubernetes/pkg/features"
 	"k8s.io/kubernetes/pkg/kubelet/cm/cpumanager/topology"
 	"k8s.io/kubernetes/pkg/kubelet/cm/topologymanager"
+	"k8s.io/utils/cpuset"
 )
 
 // Names of the options, as part of the user interface.
@@ -32,12 +33,16 @@ const (
 	FullPCPUsOnlyOption            string = "full-pcpus-only"
 	DistributeCPUsAcrossNUMAOption string = "distribute-cpus-across-numa"
 	AlignBySocketOption            string = "align-by-socket"
+	HpcCPUsListOption              string = "high-perform-cpus"
+	CpuCoresIndexInjectionOption   string = "cpu-cores-index-injection"
 )
 
 var (
 	alphaOptions = sets.NewString(
 		DistributeCPUsAcrossNUMAOption,
 		AlignBySocketOption,
+		HpcCPUsListOption,
+		CpuCoresIndexInjectionOption,
 	)
 	betaOptions = sets.NewString(
 		FullPCPUsOnlyOption,
@@ -82,6 +87,11 @@ type StaticPolicyOptions struct {
 	AlignBySocket bool
 }
 
+type HpcPolicyOptions struct {
+	HpcCPUs             string
+	CoresIndexInjection bool
+}
+
 // NewStaticPolicyOptions creates a StaticPolicyOptions struct from the user configuration.
 func NewStaticPolicyOptions(policyOptions map[string]string) (StaticPolicyOptions, error) {
 	opts := StaticPolicyOptions{}
@@ -118,6 +128,29 @@ func NewStaticPolicyOptions(policyOptions map[string]string) (StaticPolicyOption
 	return opts, nil
 }
 
+func NewHpcPolicyOptions(policyOptions map[string]string) (HpcPolicyOptions, error) {
+	opts := HpcPolicyOptions{}
+	for name, value := range policyOptions {
+		if err := CheckPolicyOptionAvailable(name); err != nil {
+			return opts, err
+		}
+
+		switch name {
+		case HpcCPUsListOption:
+			opts.HpcCPUs = value
+		case CpuCoresIndexInjectionOption:
+			optValue, err := strconv.ParseBool(value)
+			if err != nil {
+				return opts, fmt.Errorf("bad value for option %q: %w", name, err)
+			}
+			opts.CoresIndexInjection = optValue
+		default:
+			return opts, fmt.Errorf("unsupported cpumanager option: %q (%s)", name, value)
+		}
+	}
+	return opts, nil
+}
+
 // ValidateStaticPolicyOptions ensures that the requested policy options are compatible with the machine on which the CPUManager is running.
 func ValidateStaticPolicyOptions(opts StaticPolicyOptions, topology *topology.CPUTopology, topologyManager topologymanager.Store) error {
 	if opts.AlignBySocket {
@@ -131,4 +164,13 @@ func ValidateStaticPolicyOptions(opts StaticPolicyOptions, topology *topology.CP
 		}
 	}
 	return nil
+}
+
+func ValidateHpcPolicyOptions(opts HpcPolicyOptions) (cpuset.CPUSet, error) {
+	cpus, err := cpuset.Parse(opts.HpcCPUs)
+	if err != nil {
+		return cpus, err
+	}
+
+	return cpus, nil
 }

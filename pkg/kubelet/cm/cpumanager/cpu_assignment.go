@@ -243,6 +243,10 @@ func (a *cpuAccumulator) isCoreFree(coreID int) bool {
 	return a.details.CPUsInCores(coreID).Size() == a.topo.CPUsPerCore()
 }
 
+func (a *cpuAccumulator) isCoreFreeForConsumerGrade(coreID int) bool {
+	return a.details.CPUsInCores(coreID).Size() == a.topo.CPUDetails.CPUsInCores(coreID).Size()
+}
+
 // Returns free NUMA Node IDs as a slice sorted by sortAvailableNUMANodes().
 func (a *cpuAccumulator) freeNUMANodes() []int {
 	free := []int{}
@@ -270,6 +274,16 @@ func (a *cpuAccumulator) freeCores() []int {
 	free := []int{}
 	for _, core := range a.sortAvailableCores() {
 		if a.isCoreFree(core) {
+			free = append(free, core)
+		}
+	}
+	return free
+}
+
+func (a *cpuAccumulator) freeCoresAdaptForConsumerGrade() []int {
+	free := []int{}
+	for _, core := range a.sortAvailableCores() {
+		if a.isCoreFreeForConsumerGrade(core) {
 			free = append(free, core)
 		}
 	}
@@ -366,6 +380,28 @@ func (a *cpuAccumulator) takeFullCores() {
 		}
 		klog.V(4).InfoS("takeFullCores: claiming core", "core", core)
 		a.take(cpusInCore)
+	}
+}
+
+func (a *cpuAccumulator) takePackCores() {
+	for _, core := range a.freeCoresAdaptForConsumerGrade() {
+		cpusInCore := a.topo.CPUDetails.CPUsInCores(core)
+		if !a.needs(cpusInCore.Size()) {
+			continue
+		}
+		klog.V(4).InfoS("takePackCores: claiming core", "core", core)
+		a.take(cpusInCore)
+	}
+}
+
+func (a *cpuAccumulator) takeDistributeCores() {
+	for _, core := range a.freeCoresAdaptForConsumerGrade() {
+		if !a.needs(1) {
+			continue
+		}
+		process := a.topo.CPUDetails.CPUsInCoresSingle(core)
+		klog.V(4).InfoS("takeDistributeCores: claiming core", "core", core, "process", process)
+		a.take(process)
 	}
 }
 
@@ -473,6 +509,88 @@ func takeByTopologyNUMAPacked(topo *topology.CPUTopology, availableCPUs cpuset.C
 	// 2. Acquire whole cores, if available and the container requires at least
 	//    a core's-worth of CPUs.
 	acc.takeFullCores()
+	if acc.isSatisfied() {
+		return acc.result, nil
+	}
+
+	// 3. Acquire single threads, preferring to fill partially-allocated cores
+	//    on the same sockets as the whole cores we have already taken in this
+	//    allocation.
+	acc.takeRemainingCPUs()
+	if acc.isSatisfied() {
+		return acc.result, nil
+	}
+
+	return cpuset.New(), fmt.Errorf("failed to allocate cpus")
+}
+
+func takeByTopologyNUMAPackedPhysicalDistributed(topo *topology.CPUTopology, availableCPUs cpuset.CPUSet, numCPUs int) (cpuset.CPUSet, error) {
+	acc := newCPUAccumulator(topo, availableCPUs, numCPUs)
+	if acc.isSatisfied() {
+		return acc.result, nil
+	}
+	if acc.isFailed() {
+		return cpuset.New(), fmt.Errorf("not enough cpus available to satisfy request")
+	}
+
+	// Algorithm: topology-aware best-fit
+	// 1. Acquire whole NUMA nodes and sockets, if available and the container
+	//    requires at least a NUMA node or socket's-worth of CPUs. If NUMA
+	//    Nodes map to 1 or more sockets, pull from NUMA nodes first.
+	//    Otherwise pull from sockets first.
+	acc.numaOrSocketsFirst.takeFullFirstLevel()
+	if acc.isSatisfied() {
+		return acc.result, nil
+	}
+	acc.numaOrSocketsFirst.takeFullSecondLevel()
+	if acc.isSatisfied() {
+		return acc.result, nil
+	}
+
+	// 2. Acquire whole cores, if available and the container requires at least
+	//    a core's-worth of CPUs.
+	acc.takeDistributeCores()
+	if acc.isSatisfied() {
+		return acc.result, nil
+	}
+
+	// 3. Acquire single threads, preferring to fill partially-allocated cores
+	//    on the same sockets as the whole cores we have already taken in this
+	//    allocation.
+	acc.takeRemainingCPUs()
+	if acc.isSatisfied() {
+		return acc.result, nil
+	}
+
+	return cpuset.New(), fmt.Errorf("failed to allocate cpus")
+}
+
+func takeByTopologyNUMAPackedPhysicalPacked(topo *topology.CPUTopology, availableCPUs cpuset.CPUSet, numCPUs int) (cpuset.CPUSet, error) {
+	acc := newCPUAccumulator(topo, availableCPUs, numCPUs)
+	if acc.isSatisfied() {
+		return acc.result, nil
+	}
+	if acc.isFailed() {
+		return cpuset.New(), fmt.Errorf("not enough cpus available to satisfy request")
+	}
+
+	// Algorithm: topology-aware best-fit
+	// 1. Acquire whole NUMA nodes and sockets, if available and the container
+	//    requires at least a NUMA node or socket's-worth of CPUs. If NUMA
+	//    Nodes map to 1 or more sockets, pull from NUMA nodes first.
+	//    Otherwise pull from sockets first.
+	acc.numaOrSocketsFirst.takeFullFirstLevel()
+	if acc.isSatisfied() {
+		return acc.result, nil
+	}
+	acc.numaOrSocketsFirst.takeFullSecondLevel()
+	if acc.isSatisfied() {
+		return acc.result, nil
+	}
+
+	// 2. Acquire whole cores, if available and the container requires at least
+	//    a core's-worth of CPUs.
+	acc.takePackCores()
 	if acc.isSatisfied() {
 		return acc.result, nil
 	}
@@ -779,4 +897,20 @@ func takeByTopologyNUMADistributed(topo *topology.CPUTopology, availableCPUs cpu
 	// If we never found a combination of NUMA nodes that we could properly
 	// distribute CPUs across, fall back to the packing algorithm.
 	return takeByTopologyNUMAPacked(topo, availableCPUs, numCPUs)
+}
+
+func takeByTopologyOptional(topo *topology.CPUTopology, availableCPUs cpuset.CPUSet, numCPUs int, smtPolicy SMTSelectPolicy) (cpuset.CPUSet, error) {
+
+	switch SMTSelectPolicy(smtPolicy) {
+
+	case Distributed:
+		return takeByTopologyNUMAPackedPhysicalDistributed(topo, availableCPUs, numCPUs)
+
+	case Packed:
+		return takeByTopologyNUMAPackedPhysicalPacked(topo, availableCPUs, numCPUs)
+
+	default:
+		return cpuset.CPUSet{}, fmt.Errorf("unknown smtSelect policy: \"%s\"", smtPolicy)
+	}
+
 }
