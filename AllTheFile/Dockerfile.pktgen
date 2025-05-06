@@ -1,0 +1,57 @@
+FROM ubuntu:24.04 as builder
+WORKDIR /home/dpdk
+
+RUN echo 'Acquire::AllowInsecureRepositories "true";' > /etc/apt/apt.conf.d/90insecure && \
+    echo 'Acquire::AllowDowngradeToInsecureRepositories "true";' >> /etc/apt/apt.conf.d/90insecure
+
+RUN apt-get update --allow-insecure-repositories && \
+    apt-get install -y \
+    git \
+    build-essential \
+    python3-pip \
+    python3-pyelftools \
+    ninja-build \
+    pkg-config \
+    libnuma-dev \
+    libpcap-dev \
+    libssl-dev \
+    libjansson-dev \
+    libbsd-dev \
+    && rm -rf /var/lib/apt/lists/* && \
+    apt-get update --allow-insecure-repositories && \
+    apt-get install -y meson
+
+COPY dpdk .
+RUN meson setup build && \
+    cd build && \
+    ninja && \
+    ninja install && \
+    ldconfig
+WORKDIR /home/pktgen-dpdk
+COPY pktgen-dpdk .
+RUN meson setup build && \
+    cd build && \
+    ninja
+
+FROM ubuntu:24.04
+
+RUN echo 'Acquire::AllowInsecureRepositories "true";' > /etc/apt/apt.conf.d/90insecure && \
+    echo 'Acquire::AllowDowngradeToInsecureRepositories "true";' >> /etc/apt/apt.conf.d/90insecure
+
+COPY --from=builder /usr/local/lib/x86_64-linux-gnu /usr/local/lib/x86_64-linux-gnu
+COPY --from=builder /home/pktgen-dpdk/build/app/pktgen /usr/local/bin/
+COPY --from=builder /lib/x86_64-linux-gnu/ /lib/x86_64-linux-gnu/
+
+RUN apt-get update --allow-insecure-repositories && \
+    apt-get install -y \
+    libnuma1 \
+    python3-pip \
+    python3-pyelftools && \
+    apt update && \
+    apt install -y \
+    python3-pexpect \
+    vim \
+    && rm -rf /var/lib/apt/lists/* && \
+    ldconfig
+
+WORKDIR /home

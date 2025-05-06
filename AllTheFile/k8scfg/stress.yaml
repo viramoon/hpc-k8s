@@ -1,0 +1,41 @@
+apiVersion: apps/v1  
+kind: Deployment  
+metadata:  
+  name: stress-deploy  
+  namespace: dpdk  
+spec:  
+  replicas: 2 
+  selector:  
+    matchLabels:  
+      app: stress-test  
+  template:  
+    metadata:  
+      labels:  
+        app: stress-test  
+      annotations:
+        cpu-manager-hpcCoreSelect-policy: "PreferHighPerf"
+    spec:  
+      nodeSelector:  
+        kubernetes.io/hostname: kubemaster  
+      tolerations:  
+      - key: "node-role.kubernetes.io/control-plane"  
+        operator: "Exists"  
+        effect: "NoSchedule"  
+      containers:  
+      - name: loop1  
+        image: loop:v1  
+        command: ["./test"]  
+#        args: ["--cpu", "1"] 
+        resources:  
+          requests:  
+            cpu: "1" 
+            memory: "1Gi"
+          limits:  
+            cpu: "1" 
+            memory: "1Gi"
+        env:  
+        - name: CPU_EXCLUSIVE_CPUSALLOC  
+          valueFrom:  
+            fieldRef:  
+              fieldPath: metadata.annotations['cpu-exclusive-cpusalloc']
+

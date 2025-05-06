@@ -1,0 +1,2 @@
+source pick.sh
+startPerf

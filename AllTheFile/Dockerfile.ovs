@@ -1,0 +1,103 @@
+FROM ubuntu:24.04 as builder
+WORKDIR /home/dpdk
+
+RUN echo 'Acquire::AllowInsecureRepositories "true";' > /etc/apt/apt.conf.d/90insecure && \
+    echo 'Acquire::AllowDowngradeToInsecureRepositories "true";' >> /etc/apt/apt.conf.d/90insecure
+
+RUN apt-get update --allow-insecure-repositories && \
+    apt-get install -y \
+    git \
+    build-essential \
+    python3-pip \
+    python3-pyelftools \
+    ninja-build \
+    pkg-config \
+    libnuma-dev \
+    libpcap-dev \
+    libssl-dev \
+    libjansson-dev \
+    libbsd-dev \
+    libelf-dev \
+    meson \
+    libisal2 \
+    libisal-dev \
+    libipsec-mb-dev \
+    libipsec-mb1 \
+    autoconf \
+    automake \
+    libtool \
+    libtool-bin \
+    libxdp-dev \
+    libbpf-dev \
+    device-tree-compiler \
+    libfdt-dev \
+    m4 \
+    dh-autoreconf \
+    autoconf-archive \
+    python3-sphinx \
+    groff \
+    graphviz \
+    texlive-latex-base \
+    texlive-latex-extra \
+    texlive-latex-recommended \
+    texlive-fonts-recommended    
+
+COPY dpdk .
+RUN meson setup build && \
+    cd build && \
+    ninja && \
+    ninja install && \
+    ldconfig
+
+WORKDIR /home/ovs
+COPY ovs .
+
+RUN mkdir -p /usr/local/etc/openvswitch && \
+    mkdir -p /usr/local/var/run/openvswitch && \
+    mkdir -p /usr/local/var/log/openvswitch && \
+    ./boot.sh && \
+    export LD_LIBRARY_PATH=/usr/local/lib/x86_64-linux-gnu && \
+    export LIBRARY_PATH=/usr/local/lib/x86_64-linux-gnu && \
+    export PKG_CONFIG_PATH=$PKG_CONFIG_PATH:/usr/local/lib/x86_64-linux-gnu/pkgconfig && \
+    DPDK_CFLAGS=$(pkg-config --cflags libdpdk) && \
+    DPDK_LIBS=$(pkg-config --libs libdpdk) && \
+    ./configure --with-dpdk=/usr/local \
+    	CFLAGS="-Wno-error $DPDK_CFLAGS -I/usr/local/include" \
+    	LDFLAGS="-L/usr/local/lib/x86_64-linux-gnu $DPDK_LIBS" \
+    	LIBS="-lrte_eal -lrte_ethdev -lrte_mbuf -lrte_mempool -lrte_ring -lnuma -lbsd -lrt -lm -lpthread -ldl" \
+	--disable-manpage-build \
+        --disable-docs \
+    	--disable-sphinx-build && \
+    make -j 4 -i && \
+    make install
+
+FROM ubuntu:24.04
+
+RUN echo 'Acquire::AllowInsecureRepositories "true";' > /etc/apt/apt.conf.d/90insecure && \
+    echo 'Acquire::AllowDowngradeToInsecureRepositories "true";' >> /etc/apt/apt.conf.d/90insecure
+
+COPY --from=builder /usr/local/lib/x86_64-linux-gnu /usr/local/lib/x86_64-linux-gnu
+COPY --from=builder /lib/x86_64-linux-gnu/ /lib/x86_64-linux-gnu/
+COPY --from=builder /usr/local/bin/ovs* /usr/local/bin/
+COPY --from=builder /usr/local/sbin/ovs* /usr/local/sbin/
+
+RUN apt-get update --allow-insecure-repositories && \
+    apt-get install -y \
+    libnuma1 \
+    python3-pip \
+    python3-pyelftools && \
+    apt update && \
+    apt install -y \
+    python3-pexpect \
+    xdp-tools \
+    libbpf1 \
+    libisal-dev \
+    libisal2 \
+    libipsec-mb-dev \
+    libipsec-mb1 \
+    device-tree-compiler \
+    vim \
+    && rm -rf /var/lib/apt/lists/* && \
+    ldconfig
+
+WORKDIR /home

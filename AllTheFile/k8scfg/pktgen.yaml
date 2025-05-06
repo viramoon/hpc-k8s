@@ -1,0 +1,65 @@
+apiVersion: v1  
+kind: Pod
+metadata:
+  name: dpdk-pktgen
+  labels:
+    app: first-test
+  namespace: dpdk
+  annotations:
+    cpu-manager-hpcCoreSelect-policy: "PreferHighPerf"
+    cpu-manager-specify-cpus: "3,18-19"
+spec:  
+#  nodeSelector:  
+#    kubernetes.io/hostname: vm1
+  shareProcessNamespace: true
+  tolerations:
+  - key: "node-role.kubernetes.io/control-plane"
+    operator: "Exists"
+    effect: "NoSchedule"
+  containers:
+  - name: pktgen
+#    image: 192.168.10.150:30500/pktgen:latest
+    image: pktgen:v2
+    resources:  
+      limits:  
+        cpu: "3"
+        hugepages-1Gi: 1Gi   
+        memory: "2Gi"
+      requests:  
+        cpu: "3"
+        hugepages-1Gi: 1Gi  
+        memory: "2Gi"
+    command: ["python3", "/etc/scripts/pktgen.py"]
+    securityContext:  
+      privileged: true
+      capabilities:
+        add: ["SYS_ADMIN", "SYS_PTRACE"]
+      seccompProfile:
+        type: RuntimeDefault
+    volumeMounts:  
+    - name: hugepages
+      mountPath: /dev/hugepages  
+    - name: openvswitch
+      mountPath: /var/run/openvswitch
+    - name: scripts
+      mountPath: /etc/scripts
+    - name: logs
+      mountPath: /var/log
+    env:  
+    - name: KUBERNETES_EXCLUSIVE_CPUS 
+      valueFrom:  
+        fieldRef:  
+          fieldPath: metadata.annotations['cpu-exclusive-cpusalloc']
+  volumes:
+  - name: hugepages  
+    hostPath:  
+      path: /dev/hugepages  
+  - name: openvswitch 
+    hostPath:  
+      path: /usr/local/var/run/openvswitch
+  - name: scripts
+    hostPath:
+      path: /home/kagami/scripts
+  - name: logs
+    hostPath:
+      path: /var/log/dpdktest
